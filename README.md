@@ -1,6 +1,6 @@
 # POC Cache Spring Boot
 
-Ce projet est une preuve de concept (POC) démontrant la mise en place d'un système de cache avec Spring Boot.
+Ce projet est une preuve de concept (POC) démontrant la mise en place d'un système de cache avec Spring Boot, incluant une gestion événementielle pour le rechargement du cache.
 
 ## Prérequis
 
@@ -12,11 +12,12 @@ Ce projet est une preuve de concept (POC) démontrant la mise en place d'un syst
 
 ### 1. Activation du cache
 
-Le cache est activé via l'annotation `@EnableCaching` dans la classe principale de l'application :
+Le cache est activé via l'annotation `@EnableCaching` dans la classe principale de l'application. L'asynchronisme est également activé avec `@EnableAsync` :
 
 ```java
 @SpringBootApplication
 @EnableCaching
+@EnableAsync
 public class PocCacheApplication {
     public static void main(String[] args) {
         SpringApplication.run(PocCacheApplication.class, args);
@@ -26,7 +27,7 @@ public class PocCacheApplication {
 
 ### 2. Dépendances Maven
 
-Assurez-vous d'avoir la dépendance Spring Cache dans votre `pom.xml` :
+Assurez-vous d'avoir les dépendances nécessaires dans votre `pom.xml` :
 
 ```xml
 <dependency>
@@ -35,11 +36,32 @@ Assurez-vous d'avoir la dépendance Spring Cache dans votre `pom.xml` :
 </dependency>
 ```
 
+## Architecture du cache
+
+### 1. Gestion des événements de cache
+
+Le projet utilise un système d'événements Spring pour gérer le rechargement du cache :
+
+- `UtilisateurCacheReloadEvent` : Événement personnalisé déclenché lors de la modification des données
+- `UtilisateurCacheManager` : Gère le rechargement asynchrone du cache
+
+### 2. Initialisation du cache
+
+Le cache est initialisé au démarrage de l'application via la méthode `initCache()` du `UtilisateurCacheManager` :
+
+```java
+@EventListener(ApplicationReadyEvent.class)
+public void initCache() {
+    log.info("Initialisation du cache");
+    utilisateurService.getAllUtilisateurs(); // déclenche le chargement initial
+}
+```
+
 ## Utilisation du cache
 
 ### 1. Mise en cache des résultats
 
-La méthode `getAllUtilisateurs()` du service `UtilisateurService` est mise en cache avec l'annotation `@Cacheable` :
+La méthode `getAllUtilisateurs()` du service `UtilisateurService` est mise en cache :
 
 ```java
 @Cacheable("utilisateurs")
@@ -49,24 +71,38 @@ public List<Utilisateur> getAllUtilisateurs() {
 }
 ```
 
-### 2. Vidage du cache
+### 2. Vidage et rechargement du cache
 
-La méthode `removeUtilisateur()` utilise `@CacheEvict` pour vider le cache après une suppression :
+La suppression d'un utilisateur déclenche le vidage du cache et son rechargement asynchrone :
 
 ```java
 @CacheEvict(value = "utilisateurs", allEntries = true)
 public void removeUtilisateur(int id) {
     log.info("Appel de la méthode removeUtilisateur");
     utilisateurRepository.deleteById(id);
+    
+    // Déclenche le rechargement asynchrone du cache
+    eventPublisher.publishEvent(new UtilisateurCacheReloadEvent(this));
+}
+```
+
+Le rechargement est géré de manière asynchrone par le `UtilisateurCacheManager` :
+
+```java
+@Async
+@EventListener
+public void reloadCacheAsync(UtilisateurCacheReloadEvent event) {
+    utilisateurService.getAllUtilisateurs();
+    log.info("Cache rechargé en tâche de fond");
 }
 ```
 
 ## Points importants
 
 - Le cache utilise par défaut un `ConcurrentHashMap` en mémoire
-- Le nom du cache est "utilisateurs"
-- Le cache est vidé à chaque suppression d'utilisateur (`allEntries = true`)
-- Les logs permettent de vérifier le bon fonctionnement du cache
+- Le rechargement du cache est effectué de manière asynchrone
+- Les événements assurent la cohérence des données après modification
+- Les logs permettent de suivre le cycle de vie du cache
 
 ## Configuration avancée
 
@@ -80,7 +116,8 @@ Pour tester le cache : (mise en place de Swagger pourt tester, sinon :)
 2. Effectuez un GET sur `/utilisateurs` plusieurs fois de suite
 3. Observez les logs : seul le premier appel déclenche un accès à la base de données
 4. Supprimez un utilisateur avec un DELETE sur `/utilisateurs/{id}`
-5. Effectuez à nouveau un GET sur `/utilisateurs` : le cache est rechargé
+5. Observez dans les logs le rechargement asynchrone du cache
+6. Effectuez un nouveau GET sur `/utilisateurs` : les données sont fraîches
 
 ## Améliorations possibles
 
@@ -88,3 +125,4 @@ Pour tester le cache : (mise en place de Swagger pourt tester, sinon :)
 - Implémenter un fournisseur de cache distribué (Redis, Hazelcast)
 - Ajouter des métriques de cache
 - Configurer la taille maximale du cache
+- Gérer les erreurs lors du rechargement asynchrone
